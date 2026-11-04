@@ -1,0 +1,11 @@
+ROOT-TOP / THEMIS TRIALS — TEST MANUEL AVEC LE PSEUDO TULIPE
+
+1) Créer un dépôt GitHub (privé de préférence).
+2) Ajouter vote.py à la racine du dépôt.
+3) Ajouter vote.yml dans .github/workflows/ (respecter le point initial).
+4) Ouvrir l'onglet Actions > Test de vote Root-Top (Tulipe) > Run workflow.
+5) Dans le résultat de l'exécution, lire les logs et récupérer l'artefact captures-root-top.
+
+Le script soumet le formulaire une seule fois. La présence d'une page de confirmation ne garantit pas le comptage effectif du vote. Des règles anti-robots ou des restrictions propres à Root-Top peuvent s'appliquer. Aucun contournement IP ou CAPTCHA n'est prévu.
+
+La programmation est désactivée par défaut. Ne l'activer qu'après confirmation que l'automatisation est autorisée par le service. Le cron d'exemple est toutes les 3 heures (17 minutes après l'heure), afin de conserver une marge par rapport à une limitation de 2 heures.
