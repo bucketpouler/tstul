@@ -18,77 +18,23 @@ DOSSIER.mkdir(exist_ok=True)
 
 
 async def sauvegarder(page, nom, etape):
+    """Enregistre la capture et le texte de la page."""
     fichier = DOSSIER / f"{nom}-{etape}"
 
     await page.screenshot(
-        path=str(fichier.with_suffix(".png")),
+        path=str(fichier) + ".png",
         full_page=True
     )
 
     texte = await page.locator("body").inner_text()
 
-    fichier.with_suffix(".txt").write_text(
+    (Path(str(fichier) + ".txt")).write_text(
         f"URL : {page.url}\n\n{texte}",
         encoding="utf-8"
     )
 
     print(f"URL : {page.url}")
-    print("CONTENU :", texte[:2000].replace("\n", " "))
-
-
-async def diagnostic(page, nom):
-    """Consulte les détails d'un refus déjà affiché."""
-
-    message = page.get_by_text(
-        re.compile(
-            r"Ce vote n.est pas comptabilis",
-            re.IGNORECASE
-        )
-    )
-
-    if await message.count() == 0:
-        return False
-
-    print("REFUS DÉTECTÉ : vote non comptabilisé")
-
-    await sauvegarder(page, nom, "refus")
-
-    try:
-        print("Ouverture des détails...")
-
-        async with page.context.expect_page(
-            timeout=3000
-        ) as nouvelle_page_info:
-            await message.first.click(timeout=10000)
-
-        details = await nouvelle_page_info.value
-        await details.wait_for_load_state(
-            "domcontentloaded",
-            timeout=15000
-        )
-
-        await sauvegarder(
-            details, nom, "details-refus"
-        )
-
-        await details.close()
-
-    except Exception as exc:
-        print("Pas de nouvelle fenêtre :", str(exc)[:200])
-
-        try:
-            await page.wait_for_load_state(
-                "domcontentloaded",
-                timeout=10000
-            )
-        except Exception:
-            pass
-
-        await sauvegarder(
-            page, nom, "details-refus"
-        )
-
-    return True
+    print("CONTENU :", texte[:1200].replace("\n", " "))
 
 
 async def tester(page, nom, url):
@@ -101,28 +47,38 @@ async def tester(page, nom, url):
             timeout=30000
         )
 
-        print(
-            "HTTP :",
-            response.status if response else "?"
-        )
+        print("HTTP :", response.status if response else "?")
 
         await sauvegarder(page, nom, "avant")
 
-        # Vérifier le refus AVANT le formulaire.
-        if await diagnostic(page, nom):
-            print("FIN : diagnostic effectué, aucun vote soumis.")
-            return
+        # Si le message apparaît, ouvrir les détails
+        # pour afficher le formulaire.
+        refus = page.get_by_text(
+            re.compile(r"Ce vote n.est pas comptabilis", re.I)
+        )
 
+        if await refus.count() > 0:
+            print("Ouverture du formulaire...")
+            await refus.first.click(timeout=10000)
+            await page.wait_for_timeout(1000)
+
+        await sauvegarder(page, nom, "formulaire")
+
+        # Rechercher le champ du pseudo.
         champs = page.locator(
             'input[type="text"], input:not([type])'
         )
 
         if await champs.count() != 1:
-            print("Formulaire absent : aucun vote soumis.")
+            print("ÉCHEC : champ du pseudo introuvable.")
             return
 
+        # Remplir le pseudo Tulipe.
         await champs.first.fill(PSEUDO)
 
+        print(f"Pseudo renseigné : {PSEUDO}")
+
+        # Rechercher le bouton.
         bouton = page.get_by_role(
             "button",
             name=re.compile("entrer et voter", re.I)
@@ -134,10 +90,11 @@ async def tester(page, nom, url):
             )
 
         if await bouton.count() != 1:
-            print("Bouton de vote introuvable.")
+            print("ÉCHEC : bouton de vote introuvable.")
             return
 
-        print("Formulaire trouvé : vote avec Tulipe")
+        # Une seule soumission par topsite.
+        print("Envoi du vote...")
 
         await bouton.first.click(timeout=15000)
 
@@ -149,10 +106,20 @@ async def tester(page, nom, url):
         except Exception:
             pass
 
-        await sauvegarder(page, nom, "apres")
+        await page.wait_for_timeout(1500)
 
-        if not await diagnostic(page, nom):
-            print("Résultat à vérifier dans les captures.")
+        # Sauvegarder le résultat après le vote.
+        await sauvegarder(page, nom, "resultat")
+
+        texte = (await page.locator("body").inner_text()).lower()
+
+        if "ce vote n'est pas comptabilisé" in texte:
+            print("RÉSULTAT : VOTE NON COMPTABILISÉ")
+        else:
+            print(
+                "RÉSULTAT : soumission effectuée. "
+                "Vérifier la confirmation dans la capture."
+            )
 
     except Exception as exc:
         print(f"ERREUR : {type(exc).__name__} : {exc}")
