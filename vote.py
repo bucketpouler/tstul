@@ -1,8 +1,10 @@
 
 import asyncio
+import json
 import re
 from pathlib import Path
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+from playwright.async_api import async_playwright
 
 PSEUDO = "Tulipe"
 
@@ -14,11 +16,12 @@ SITES = {
 }
 
 DOSSIER = Path("captures")
-DOSSIER.mkdir(exist_ok=True)
+DOSSIER.mkdir(parents=True, exist_ok=True)
 
 
 async def sauvegarder(page, nom, etape):
-    """Sauvegarde une capture et le texte affiché."""
+    """Enregistre la capture et le texte de la page."""
+
     base = DOSSIER / f"{nom}-{etape}"
 
     await page.screenshot(
@@ -34,18 +37,24 @@ async def sauvegarder(page, nom, etape):
     )
 
     print("URL :", page.url)
-    print("CONTENU :", texte[:1500].replace("\n", " "))
+    print(
+        "CONTENU :",
+        texte[:1500].replace("\n", " ")
+    )
 
 
-async def ouvrir_formulaire(page, nom):
-    """Ouvre le formulaire et récupère la bonne fenêtre."""
+async def ouvrir_formulaire(page):
+    """Récupère la fenêtre contenant le formulaire."""
 
     refus = page.get_by_text(
-        re.compile(r"Ce vote n.est pas comptabilis", re.I)
+        re.compile(
+            r"Ce vote n.est pas comptabilis",
+            re.I
+        )
     )
 
     if await refus.count() == 0:
-        print("Aucun message de refus initial.")
+        print("Aucun message initial de refus.")
         return page
 
     print("Ouverture du formulaire...")
@@ -54,7 +63,6 @@ async def ouvrir_formulaire(page, nom):
 
     await refus.first.click(timeout=15000)
 
-    # Laisser le temps à une éventuelle nouvelle fenêtre.
     await page.wait_for_timeout(1500)
 
     nouvelles_pages = [
@@ -70,26 +78,70 @@ async def ouvrir_formulaire(page, nom):
             timeout=15000
         )
 
-        print("Nouvelle fenêtre détectée :", nouvelle_page.url)
+        print(
+            "Nouvelle fenêtre détectée :",
+            nouvelle_page.url
+        )
+
         return nouvelle_page
 
-    # Vérifier si le formulaire est apparu dans la même page.
     champs = page.locator(
         'input[type="text"], input:not([type])'
     )
 
     if await champs.count() > 0:
         print("Formulaire trouvé dans la même fenêtre.")
-        return page
 
-    print("Formulaire non détecté après le clic.")
     return page
 
 
-async def tester(page, nom, url):
-    print(f"\n===== {nom} =====")
+async def analyser_boutons(page, nom):
+    """Liste les éléments susceptibles de valider le formulaire."""
 
-    page_formulaire = page
+    elements = await page.locator(
+        'button, '
+        'input[type="submit"], '
+        'input[type="image"], '
+        'a, '
+        '[role="button"]'
+    ).evaluate_all("""
+        elements => elements.map(el => ({
+            tag: el.tagName,
+            type: el.getAttribute("type"),
+            texte: (el.innerText || "").trim(),
+            valeur: el.getAttribute("value"),
+            titre: el.getAttribute("title"),
+            alt: el.getAttribute("alt"),
+            href: el.getAttribute("href")
+        }))
+    """)
+
+    print(
+        "ÉLÉMENTS CLIQUABLES :",
+        json.dumps(
+            elements,
+            ensure_ascii=False,
+            indent=2
+        )
+    )
+
+    chemin = DOSSIER / f"{nom}-boutons.json"
+
+    chemin.write_text(
+        json.dumps(
+            elements,
+            ensure_ascii=False,
+            indent=2
+        ),
+        encoding="utf-8"
+    )
+
+    print("Diagnostic enregistré :", chemin)
+
+
+async def tester(page, nom, url):
+
+    print(f"\n===== {nom} =====")
 
     try:
         response = await page.goto(
@@ -98,12 +150,14 @@ async def tester(page, nom, url):
             timeout=30000
         )
 
-        print("HTTP :", response.status if response else "?")
+        print(
+            "HTTP :",
+            response.status if response else "?"
+        )
 
         await sauvegarder(page, nom, "avant")
 
-        # Ouvrir le formulaire et récupérer la fenêtre active.
-        page_formulaire = await ouvrir_formulaire(page, nom)
+        page_formulaire = await ouvrir_formulaire(page)
 
         await sauvegarder(
             page_formulaire,
@@ -115,64 +169,34 @@ async def tester(page, nom, url):
             'input[type="text"], input:not([type])'
         )
 
-        if await champs.count() != 1:
+        nombre = await champs.count()
+
+        if nombre != 1:
             print(
                 "ÉCHEC : champ du pseudo introuvable. "
-                f"Nombre de champs : {await champs.count()}"
+                f"Nombre de champs : {nombre}"
             )
             return
 
-        # Renseigner le pseudo.
         await champs.first.fill(PSEUDO)
 
         print("Pseudo renseigné :", PSEUDO)
 
-        bouton = page_formulaire.get_by_role(
-            "button",
-            name=re.compile("entrer et voter", re.I)
-        )
-
-        if await bouton.count() != 1:
-            bouton = page_formulaire.locator(
-                'input[type="submit"][value*="voter" i]'
-            )
-
-        if await bouton.count() != 1:
-            print("ÉCHEC : bouton de vote introuvable.")
-            return
-
-        print("Envoi du vote...")
-
-        # Une seule soumission par topsite.
-        await bouton.first.click(timeout=15000)
-
-        try:
-            await page_formulaire.wait_for_load_state(
-                "domcontentloaded",
-                timeout=15000
-            )
-        except PlaywrightTimeout:
-            print("Navigation non confirmée.")
-
-        await page_formulaire.wait_for_timeout(1500)
-
         await sauvegarder(
             page_formulaire,
             nom,
-            "resultat"
+            "pseudo-rempli"
         )
 
-        texte = (
-            await page_formulaire.locator("body").inner_text()
-        ).lower()
+        await analyser_boutons(
+            page_formulaire,
+            nom
+        )
 
-        if "ce vote n'est pas comptabilisé" in texte:
-            print("RÉSULTAT : VOTE NON COMPTABILISÉ")
-        else:
-            print(
-                "RÉSULTAT : soumission effectuée. "
-                "Vérification de la confirmation nécessaire."
-            )
+        print(
+            "DIAGNOSTIC TERMINÉ : "
+            "aucun vote soumis pendant ce test."
+        )
 
     except Exception as exc:
         print(
@@ -181,7 +205,7 @@ async def tester(page, nom, url):
 
         try:
             await sauvegarder(
-                page_formulaire,
+                page,
                 nom,
                 "erreur"
             )
@@ -190,17 +214,26 @@ async def tester(page, nom, url):
 
 
 async def main():
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+
+        browser = await p.chromium.launch(
+            headless=True
+        )
 
         try:
             for nom, url in SITES.items():
+
                 page = await browser.new_page(
                     locale="fr-FR"
                 )
 
                 try:
-                    await tester(page, nom, url)
+                    await tester(
+                        page,
+                        nom,
+                        url
+                    )
                 finally:
                     await page.context.close()
 
