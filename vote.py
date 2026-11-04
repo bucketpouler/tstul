@@ -1,41 +1,71 @@
+"""Test manuel des formulaires de vote Root-Top pour Tulipe.
+
+Une seule soumission par topsite et par exécution. Ne contourne pas les limites IP.
+"""
 import asyncio
-import os
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 
-URL = 'http://www.root-top.com/topsite/justmarried/in.php?IDmark=1333'
-PSEUDO = 'Tulipe'
+PSEUDO = "Tulipe"
+SITES = {
+    "justmarried-1333": "http://www.root-top.com/topsite/justmarried/in.php?IDmark=1333",
+    "virtu4ldreaiviz-5970": "http://www.root-top.com/topsite/virtu4ldreaiviz/in.php?IDmark=5970",
+    "virtu4lgames-7046": "http://www.root-top.com/topsite/virtu4lgames/in.php?IDmark=7046",
+    "gilgamesh-8765": "http://www.root-top.com/topsite/gilgamesh/in.php?IDmark=8765",
+}
+
+async def tester(page, nom, url):
+    print(f"\n===== {nom} =====")
+    try:
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        print("HTTP initial :", response.status if response else "sans réponse")
+        await page.screenshot(path=f"captures/{nom}-avant.png", full_page=True)
+
+        # Repérage du formulaire : un input texte/identifiant et un bouton de vote.
+        candidates = page.locator('input[type="text"], input:not([type])')
+        nb = await candidates.count()
+        if nb != 1:
+            print(f"NON SOUMIS : {nb} champs texte trouvés (attendu : 1).")
+            return
+        await candidates.first.fill(PSEUDO)
+        bouton = page.get_by_role("button", name=re.compile("entrer et voter", re.I))
+        if await bouton.count() != 1:
+            bouton = page.locator('input[type="submit"][value*="voter" i]')
+        if await bouton.count() != 1:
+            print("NON SOUMIS : bouton de vote introuvable ou ambigu.")
+            return
+
+        await bouton.first.click(timeout=15000)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            print("Navigation non confirmée ; récupération de l'état affiché.")
+        await page.screenshot(path=f"captures/{nom}-apres.png", full_page=True)
+        print("URL après clic :", page.url)
+        print("Résultat affiché :", (await page.locator("body").inner_text())[:900].replace("\n", " "))
+        print("Soumission effectuée ; vérifier le texte ou la capture pour confirmer le comptage.")
+    except Exception as exc:
+        print(f"ÉCHEC : {type(exc).__name__} : {exc}")
+        try:
+            await page.screenshot(path=f"captures/{nom}-erreur.png", full_page=True)
+        except Exception:
+            pass
 
 async def main():
+    Path("captures").mkdir(exist_ok=True)
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(locale='fr-FR')
         try:
-            response = await page.goto(URL, wait_until='domcontentloaded', timeout=30000)
-            print(f'Page HTTP : {response.status if response else "aucune réponse"}')
-            print('URL affichée :', page.url)
-            # Capture avant tentative pour diagnostiquer les différences entre navigateurs.
-            await page.screenshot(path='avant.png', full_page=True)
-            field = page.get_by_text('Identifiant du votant', exact=False)
-            if await field.count() == 0:
-                print('Libellé introuvable : vérification des champs texte disponibles.')
-            inputs = page.locator('input[type="text"], input:not([type])')
-            if await inputs.count() != 1:
-                raise RuntimeError(f'Formulaire ambigu : {await inputs.count()} champs texte trouvés. Vérifier avant de voter.')
-            await inputs.first.fill(PSEUDO)
-            button = page.get_by_role('button', name='Entrer et voter')
-            if await button.count() == 0:
-                button = page.locator('input[type="submit"][value*="voter" i]')
-            if await button.count() != 1:
-                raise RuntimeError('Bouton de vote non trouvé de manière fiable.')
-            await button.first.click(timeout=15000)
-            await page.wait_for_load_state('domcontentloaded', timeout=20000)
-            await page.screenshot(path='apres.png', full_page=True)
-            print('URL après clic :', page.url)
-            print('Extrait du résultat :', (await page.locator('body').inner_text())[:1600])
-            print('IMPORTANT : le script a soumis le formulaire, mais ne peut pas confirmer à lui seul que le vote a été comptabilisé.')
+            for nom, url in SITES.items():
+                page = await browser.new_page(locale="fr-FR")
+                try:
+                    await tester(page, nom, url)
+                finally:
+                    await page.close()
         finally:
             await browser.close()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
