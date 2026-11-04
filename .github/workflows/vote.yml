@@ -1,0 +1,30 @@
+name: Test de vote Root-Top (Tulipe)
+
+on:
+  workflow_dispatch:
+  # À activer UNIQUEMENT après vérification des règles Root-Top et d'un test réussi :
+  # schedule:
+  #   - cron: '17 */3 * * *'
+
+jobs:
+  tester-vote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Installer Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Lancer une tentative unique
+        run: python vote.py
+      - name: Sauvegarder les captures (même en cas d'erreur)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-root-top
+          path: '*.png'
+          if-no-files-found: ignore
