@@ -1,6 +1,4 @@
 
-"""Test des formulaires Root-Top et diagnostic des votes refusés."""
-
 import asyncio
 import re
 from pathlib import Path
@@ -15,87 +13,85 @@ SITES = {
     "gilgamesh-8765": "http://www.root-top.com/topsite/gilgamesh/in.php?IDmark=8765",
 }
 
+DOSSIER = Path("captures")
+DOSSIER.mkdir(exist_ok=True)
 
-async def enregistrer(page, nom, etape):
-    """Enregistre une capture et le texte de la page."""
-    chemin = Path("captures")
+
+async def sauvegarder(page, nom, etape):
+    fichier = DOSSIER / f"{nom}-{etape}"
 
     await page.screenshot(
-        path=str(chemin / f"{nom}-{etape}.png"),
+        path=str(fichier.with_suffix(".png")),
         full_page=True
     )
 
     texte = await page.locator("body").inner_text()
 
-    (chemin / f"{nom}-{etape}.txt").write_text(
+    fichier.with_suffix(".txt").write_text(
         f"URL : {page.url}\n\n{texte}",
         encoding="utf-8"
     )
 
     print(f"URL : {page.url}")
-    print(f"Texte : {texte[:1500].replace(chr(10), ' ')}")
+    print("CONTENU :", texte[:2000].replace("\n", " "))
 
 
-async def attendre_page(page):
-    """Laisse la navigation se terminer."""
-    try:
-        await page.wait_for_load_state(
-            "domcontentloaded",
-            timeout=15000
-        )
-    except Exception:
-        pass
+async def diagnostic(page, nom):
+    """Consulte les détails d'un refus déjà affiché."""
 
-    await page.wait_for_timeout(1500)
-
-
-async def diagnostiquer_refus(page, nom):
-    """Ouvre la page explicative d'un vote non comptabilisé."""
-
-    lien = page.get_by_text(
+    message = page.get_by_text(
         re.compile(
             r"Ce vote n.est pas comptabilis",
             re.IGNORECASE
         )
     )
 
-    if await lien.count() == 0:
-        print("Aucun lien de refus détecté.")
+    if await message.count() == 0:
         return False
 
-    print("VOTE NON COMPTABILISÉ")
-    print("Ouverture des détails du refus...")
+    print("REFUS DÉTECTÉ : vote non comptabilisé")
+
+    await sauvegarder(page, nom, "refus")
 
     try:
-        await lien.first.click(timeout=15000)
-        await attendre_page(page)
+        print("Ouverture des détails...")
 
-        await enregistrer(
-            page,
-            nom,
-            "details-refus"
+        async with page.context.expect_page(
+            timeout=3000
+        ) as nouvelle_page_info:
+            await message.first.click(timeout=10000)
+
+        details = await nouvelle_page_info.value
+        await details.wait_for_load_state(
+            "domcontentloaded",
+            timeout=15000
         )
 
-        print("Diagnostic du refus enregistré.")
-        return True
+        await sauvegarder(
+            details, nom, "details-refus"
+        )
+
+        await details.close()
 
     except Exception as exc:
-        print(
-            f"Impossible d'ouvrir les détails : "
-            f"{type(exc).__name__} : {exc}"
+        print("Pas de nouvelle fenêtre :", str(exc)[:200])
+
+        try:
+            await page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=10000
+            )
+        except Exception:
+            pass
+
+        await sauvegarder(
+            page, nom, "details-refus"
         )
 
-        await enregistrer(
-            page,
-            nom,
-            "erreur-diagnostic"
-        )
-
-        return False
+    return True
 
 
 async def tester(page, nom, url):
-
     print(f"\n===== {nom} =====")
 
     try:
@@ -106,32 +102,30 @@ async def tester(page, nom, url):
         )
 
         print(
-            "HTTP initial :",
-            response.status if response else "sans réponse"
+            "HTTP :",
+            response.status if response else "?"
         )
 
-        await enregistrer(page, nom, "avant")
+        await sauvegarder(page, nom, "avant")
 
-        candidates = page.locator(
+        # Vérifier le refus AVANT le formulaire.
+        if await diagnostic(page, nom):
+            print("FIN : diagnostic effectué, aucun vote soumis.")
+            return
+
+        champs = page.locator(
             'input[type="text"], input:not([type])'
         )
 
-        nb = await candidates.count()
-
-        if nb != 1:
-            print(
-                f"NON SOUMIS : {nb} champs texte trouvés."
-            )
+        if await champs.count() != 1:
+            print("Formulaire absent : aucun vote soumis.")
             return
 
-        await candidates.first.fill(PSEUDO)
+        await champs.first.fill(PSEUDO)
 
         bouton = page.get_by_role(
             "button",
-            name=re.compile(
-                "entrer et voter",
-                re.IGNORECASE
-            )
+            name=re.compile("entrer et voter", re.I)
         )
 
         if await bouton.count() != 1:
@@ -140,76 +134,47 @@ async def tester(page, nom, url):
             )
 
         if await bouton.count() != 1:
-            print(
-                "NON SOUMIS : bouton introuvable."
-            )
+            print("Bouton de vote introuvable.")
             return
 
-        print(f"Soumission du vote : {PSEUDO}")
+        print("Formulaire trouvé : vote avec Tulipe")
 
         await bouton.first.click(timeout=15000)
 
-        await attendre_page(page)
-
-        await enregistrer(page, nom, "apres")
-
-        refus = await diagnostiquer_refus(
-            page,
-            nom
-        )
-
-        if refus:
-            print(
-                "RÉSULTAT : vote refusé, détails enregistrés."
+        try:
+            await page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=15000
             )
-        else:
-            print(
-                "RÉSULTAT : aucun message de refus détecté. "
-                "Vérification manuelle nécessaire."
-            )
+        except Exception:
+            pass
+
+        await sauvegarder(page, nom, "apres")
+
+        if not await diagnostic(page, nom):
+            print("Résultat à vérifier dans les captures.")
 
     except Exception as exc:
-
-        print(
-            f"ÉCHEC : {type(exc).__name__} : {exc}"
-        )
+        print(f"ERREUR : {type(exc).__name__} : {exc}")
 
         try:
-            await enregistrer(
-                page,
-                nom,
-                "erreur"
-            )
+            await sauvegarder(page, nom, "erreur")
         except Exception:
             pass
 
 
 async def main():
-
-    Path("captures").mkdir(exist_ok=True)
-
     async with async_playwright() as p:
-
-        browser = await p.chromium.launch(
-            headless=True
-        )
+        browser = await p.chromium.launch(headless=True)
 
         try:
             for nom, url in SITES.items():
-
-                page = await browser.new_page(
-                    locale="fr-FR"
-                )
+                page = await browser.new_page(locale="fr-FR")
 
                 try:
-                    await tester(
-                        page,
-                        nom,
-                        url
-                    )
+                    await tester(page, nom, url)
                 finally:
                     await page.close()
-
         finally:
             await browser.close()
 
