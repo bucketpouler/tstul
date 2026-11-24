@@ -1,5 +1,5 @@
 
-name: Root-Top - 50 jobs independants
+name: Root-Top - 50 diagnostics Playwright
 
 on:
   workflow_dispatch:
@@ -10,7 +10,6 @@ permissions:
 jobs:
   diagnostic:
     name: Machine ${{ matrix.numero }}/50
-
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -33,12 +32,18 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Executer
+      - name: Installer Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Executer le diagnostic
         env:
           CYCLE: ${{ matrix.numero }}
         run: python vote.py
 
-      - name: Enregistrer les resultats
+      - name: Sauvegarder les resultats
         if: always()
         uses: actions/upload-artifact@v4
         with:
