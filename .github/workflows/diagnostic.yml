@@ -1,3 +1,46 @@
+
+name: Test Root-Top - 50 cycles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: Cycle ${{ matrix.cycle }}/50
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        cycle: ${{ fromJSON('[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50]') }}
+
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Configurer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Tester les quatre topsites
+        env:
+          CYCLE: ${{ matrix.cycle }}
+        run: python diagnostic.py
+
+      - name: Enregistrer le rapport individuel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-cycle-${{ matrix.cycle }}
+          path: rapports/
+          if-no-files-found: warn
+          retention-days: 7
+
   regrouper:
     name: Regrouper les 50 rapports
     needs: diagnostic
@@ -17,9 +60,10 @@
           cd tous-les-rapports
           zip -r ../rapports-complets.zip .
 
-      - name: Publier l'archive
+      - name: Publier l'archive complète
         uses: actions/upload-artifact@v4
         with:
           name: RAPPORT-COMPLET-50-CYCLES
           path: rapports-complets.zip
+          if-no-files-found: error
           retention-days: 7
