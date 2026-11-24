@@ -33,10 +33,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Executer le diagnostic
+      - name: Executer
         env:
           CYCLE: ${{ matrix.numero }}
-        run: python diagnostic.py
+        run: python vote.py
 
       - name: Enregistrer les resultats
         if: always()
