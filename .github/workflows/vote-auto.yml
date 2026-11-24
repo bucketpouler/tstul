@@ -1,30 +1,27 @@
 
-name: Tulipe - Votes toutes les 10 minutes
+name: Tulipe - 50 cycles de votes
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '7,17,27,37,47,57 * * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: tulipe-votes
+  group: tulipe-serie-votes
   cancel-in-progress: false
 
 jobs:
   voter:
-    name: Voter sur les 4 topsites
+    name: 50 cycles - 4 topsites
     runs-on: ubuntu-latest
-
-    timeout-minutes: 8
+    timeout-minutes: 180
 
     steps:
       - name: Recuperer le depot
         uses: actions/checkout@v4
 
-      - name: Configurer Python
+      - name: Installer Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -34,14 +31,114 @@ jobs:
           python -m pip install playwright
           python -m playwright install --with-deps chromium
 
-      - name: Voter avec Tulipe
-        run: python vote.py
+      - name: Lancer les 50 cycles
+        shell: bash
+        run: |
+          python - <<'PY'
+          import subprocess
+          import time
+          import shutil
+          import json
+          from pathlib import Path
+          from datetime import datetime, timezone
 
-      - name: Sauvegarder les captures
+          TOTAL = 50
+          INTERVALLE = 120
+
+          dossier = Path("resultats")
+          dossier.mkdir(exist_ok=True)
+
+          rapport = []
+
+          for cycle in range(1, TOTAL + 1):
+              debut = time.monotonic()
+
+              print(
+                  f"\n===== CYCLE {cycle}/{TOTAL} =====",
+                  flush=True
+              )
+
+              captures = Path("captures")
+
+              if captures.exists():
+                  shutil.rmtree(captures)
+
+              horodatage = datetime.now(
+                  timezone.utc
+              ).isoformat()
+
+              execution = subprocess.run(
+                  ["python", "vote.py"],
+                  text=True,
+                  capture_output=True
+              )
+
+              print(execution.stdout, flush=True)
+
+              if execution.stderr:
+                  print(execution.stderr, flush=True)
+
+              destination = dossier / f"cycle-{cycle:02d}"
+              destination.mkdir(exist_ok=True)
+
+              (destination / "logs.txt").write_text(
+                  execution.stdout + "\n" + execution.stderr,
+                  encoding="utf-8"
+              )
+
+              if captures.exists():
+                  shutil.copytree(
+                      captures,
+                      destination / "captures",
+                      dirs_exist_ok=True
+                  )
+
+              duree = time.monotonic() - debut
+
+              rapport.append({
+                  "cycle": cycle,
+                  "date": horodatage,
+                  "code_retour": execution.returncode,
+                  "duree_secondes": round(duree, 2)
+              })
+
+              print(
+                  f"Cycle {cycle} termine. "
+                  f"Code : {execution.returncode}",
+                  flush=True
+              )
+
+              if cycle < TOTAL:
+                  attente = max(
+                      0,
+                      INTERVALLE - duree
+                  )
+
+                  print(
+                      f"Prochain cycle dans "
+                      f"{attente:.0f} secondes.",
+                      flush=True
+                  )
+
+                  time.sleep(attente)
+
+          (dossier / "rapport.json").write_text(
+              json.dumps(
+                  rapport,
+                  ensure_ascii=False,
+                  indent=2
+              ),
+              encoding="utf-8"
+          )
+
+          print("\n50 cycles termines.", flush=True)
+          PY
+
+      - name: Sauvegarder tous les resultats
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: captures-tulipe-${{ github.run_number }}
-          path: captures/
+          name: RESULTATS-TULIPE-50-CYCLES
+          path: resultats/
           if-no-files-found: warn
-          retention-days: 3
+          retention-days: 7
