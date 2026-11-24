@@ -1,5 +1,5 @@
 
-name: Tulipe - 50 cycles de votes
+name: Root-Top - 50 jobs independants
 
 on:
   workflow_dispatch:
@@ -7,15 +7,22 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: tulipe-serie-votes
-  cancel-in-progress: false
-
 jobs:
-  voter:
-    name: 50 cycles - 4 topsites
+  diagnostic:
+    name: Machine ${{ matrix.numero }}/50
+
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        numero: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+                 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
 
     steps:
       - name: Recuperer le depot
@@ -26,119 +33,37 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Installer Playwright
-        run: |
-          python -m pip install playwright
-          python -m playwright install --with-deps chromium
+      - name: Executer le diagnostic
+        env:
+          CYCLE: ${{ matrix.numero }}
+        run: python diagnostic.py
 
-      - name: Lancer les 50 cycles
-        shell: bash
-        run: |
-          python - <<'PY'
-          import subprocess
-          import time
-          import shutil
-          import json
-          from pathlib import Path
-          from datetime import datetime, timezone
-
-          TOTAL = 50
-          INTERVALLE = 120
-
-          dossier = Path("resultats")
-          dossier.mkdir(exist_ok=True)
-
-          rapport = []
-
-          for cycle in range(1, TOTAL + 1):
-              debut = time.monotonic()
-
-              print(
-                  f"\n===== CYCLE {cycle}/{TOTAL} =====",
-                  flush=True
-              )
-
-              captures = Path("captures")
-
-              if captures.exists():
-                  shutil.rmtree(captures)
-
-              horodatage = datetime.now(
-                  timezone.utc
-              ).isoformat()
-
-              execution = subprocess.run(
-                  ["python", "vote.py"],
-                  text=True,
-                  capture_output=True
-              )
-
-              print(execution.stdout, flush=True)
-
-              if execution.stderr:
-                  print(execution.stderr, flush=True)
-
-              destination = dossier / f"cycle-{cycle:02d}"
-              destination.mkdir(exist_ok=True)
-
-              (destination / "logs.txt").write_text(
-                  execution.stdout + "\n" + execution.stderr,
-                  encoding="utf-8"
-              )
-
-              if captures.exists():
-                  shutil.copytree(
-                      captures,
-                      destination / "captures",
-                      dirs_exist_ok=True
-                  )
-
-              duree = time.monotonic() - debut
-
-              rapport.append({
-                  "cycle": cycle,
-                  "date": horodatage,
-                  "code_retour": execution.returncode,
-                  "duree_secondes": round(duree, 2)
-              })
-
-              print(
-                  f"Cycle {cycle} termine. "
-                  f"Code : {execution.returncode}",
-                  flush=True
-              )
-
-              if cycle < TOTAL:
-                  attente = max(
-                      0,
-                      INTERVALLE - duree
-                  )
-
-                  print(
-                      f"Prochain cycle dans "
-                      f"{attente:.0f} secondes.",
-                      flush=True
-                  )
-
-                  time.sleep(attente)
-
-          (dossier / "rapport.json").write_text(
-              json.dumps(
-                  rapport,
-                  ensure_ascii=False,
-                  indent=2
-              ),
-              encoding="utf-8"
-          )
-
-          print("\n50 cycles termines.", flush=True)
-          PY
-
-      - name: Sauvegarder tous les resultats
+      - name: Enregistrer les resultats
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RESULTATS-TULIPE-50-CYCLES
-          path: resultats/
+          name: rapport-${{ matrix.numero }}
+          path: rapports/
           if-no-files-found: warn
+          retention-days: 7
+
+  regrouper:
+    name: Regrouper les resultats
+    needs: diagnostic
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperer les rapports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rapport-*
+          path: resultats/
+          merge-multiple: true
+
+      - name: Publier le rapport complet
+        uses: actions/upload-artifact@v4
+        with:
+          name: RAPPORT-COMPLET
+          path: resultats/
           retention-days: 7
